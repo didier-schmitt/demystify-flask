@@ -1,8 +1,11 @@
 #!/usr/bin/env python
 
-from flask import Flask, render_template, request, abort, current_app
+from functools import wraps
+
+from flask import Flask, render_template, request, abort, current_app, Response
 from flask_sqlalchemy import SQLAlchemy
-from flask_security import Security, SQLAlchemyUserDatastore, UserMixin, RoleMixin, auth_token_required, roles_accepted, current_user
+from flask_security import Security, SQLAlchemyUserDatastore, UserMixin, RoleMixin, auth_token_required, current_user
+from flask_principal import Permission, RoleNeed
 
 app = Flask(__name__)
 app.config['DEBUG'] = True
@@ -67,10 +70,25 @@ def unauthorized(e):
 def authorize(token):
     return User.query.filter_by(api_key=token).first()
 
+def any_role(*roles):
+    """
+    Flask-Security's @roles_accepted decoration returns HTTP 401 when roles expected are missing 
+    Yet we wish to return HTTP 403
+    """
+    def wrapper(fn):
+        @wraps(fn)
+        def decorated_view(*args, **kwargs):
+            perm = Permission(*[RoleNeed(role) for role in roles])
+            if perm.can():
+                return fn(*args, **kwargs)
+            else:
+                return Response("You are not authorized to perform this request", 403)
+        return decorated_view
+    return wrapper
+
 @app.route('/socle/<socle>/<version>/<server>', methods=['GET', 'PUT'])
 @auth_token_required
-@roles_accepted('admin', 'user') 
-# Flask-Security returns HTTP 401 when roles expected are missing but it should return HTTP 403
+@any_role('admin', 'user') 
 def socle(socle, version, server):
     if request.method == 'GET':
         return 'You want me to install %s %s on server %s' % (socle, version, server)
