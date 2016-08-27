@@ -38,9 +38,6 @@ class User(db.Model, UserMixin):
     confirmed_at = db.Column(db.DateTime())
     roles = db.relationship('Role', secondary=roles_users, backref=db.backref('users', lazy='dynamic'))
 
-    def __repr__(self):
-        return self.name
-
 user_datastore = SQLAlchemyUserDatastore(db, User, Role)
 security = Security(app, user_datastore)
 
@@ -93,17 +90,6 @@ def all_roles(*roles):
         return decorated_view
     return wrapper
 
-@app.route('/socle/<socle>/<version>/<server>', methods=['GET', 'PUT'])
-@auth_token_required
-@all_roles('admin', 'user') 
-def socle(socle, version, server):
-    if request.method == 'GET':
-        return 'You want me to install %s %s on server %s' % (socle, version, server)
-    else:
-        if not current_user.has_role('admin'):
-            abort(403)
-        return 'Installing %s %s on %s...' % (socle, version, server)
-
 api = Api(app)
 
 def api_router(self, *args, **kwargs):
@@ -134,10 +120,8 @@ class Users(Resource):
         return {'message': "Welcome User"}
     
     @auth_token_required
-    @any_role('admin', 'user')
+    @any_role('admin')
     def put(self):
-        if not current_user.has_role('admin'):
-            abort(403)
         return {'message': "New user created"}
 
 @api.route('/users/me')
