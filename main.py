@@ -51,6 +51,7 @@ def create_realm():
     u = user_datastore.create_role(name='user')
 
     user_datastore.add_role_to_user(b, a)
+    user_datastore.add_role_to_user(b, u)
     user_datastore.add_role_to_user(f, u)
 
     db.session.commit()
@@ -65,6 +66,10 @@ def hello():
 @app.errorhandler(401)
 def unauthorized(e):
     return "You didn't say the magic word", 401, {'WWW-Authenticate': 'Token realm="Flask"'}
+
+@app.errorhandler(403)
+def forbidden(e):
+    return "You are not allowed to perform this request", 403
 
 @app.login_manager.token_loader
 def authorize(token):
@@ -82,18 +87,30 @@ def any_role(*roles):
             if perm.can():
                 return fn(*args, **kwargs)
             else:
-                return Response("You are not authorized to perform this request", 403)
+                abort(403)
+        return decorated_view
+    return wrapper
+
+def all_roles(*roles):
+    def wrapper(fn):
+        @wraps(fn)
+        def decorated_view(*args, **kwargs):
+            perms = [Permission(RoleNeed(role)) for role in roles]
+            for perm in perms:
+                if not perm.can():
+                    abort(403)
+            return fn(*args, **kwargs)
         return decorated_view
     return wrapper
 
 @app.route('/socle/<socle>/<version>/<server>', methods=['GET', 'PUT'])
 @auth_token_required
-@any_role('admin', 'user') 
+@all_roles('admin', 'user') 
 def socle(socle, version, server):
     if request.method == 'GET':
         return 'You want me to install %s %s on server %s' % (socle, version, server)
     else:
-        if not  current_user.has_role('admin'):
+        if not current_user.has_role('admin'):
             abort(403)
         return 'Installing %s %s on %s...' % (socle, version, server)
 
