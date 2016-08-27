@@ -1,11 +1,13 @@
 #!/usr/bin/env python
 
 from functools import wraps
+import types
 
 from flask import Flask, render_template, request, abort, current_app, Response
 from flask_sqlalchemy import SQLAlchemy
 from flask_security import Security, SQLAlchemyUserDatastore, UserMixin, RoleMixin, auth_token_required, current_user
 from flask_principal import Permission, RoleNeed
+from flask_restful import Api, Resource
 
 app = Flask(__name__)
 app.config['DEBUG'] = True
@@ -36,6 +38,9 @@ class User(db.Model, UserMixin):
     confirmed_at = db.Column(db.DateTime())
     roles = db.relationship('Role', secondary=roles_users, backref=db.backref('users', lazy='dynamic'))
 
+    def __repr__(self):
+        return self.name
+
 user_datastore = SQLAlchemyUserDatastore(db, User, Role)
 security = Security(app, user_datastore)
 
@@ -55,21 +60,6 @@ def create_realm():
     user_datastore.add_role_to_user(f, u)
 
     db.session.commit()
-
-    ## Monkey patching the flasksecurity callback
-    current_app.extensions['security']._unauthorized_callback = lambda: abort(401)
-
-@app.route('/')
-def hello():
-    return 'Peace Love & Death Metal'
-
-@app.errorhandler(401)
-def unauthorized(e):
-    return "You didn't say the magic word", 401, {'WWW-Authenticate': 'Token realm="Flask"'}
-
-@app.errorhandler(403)
-def forbidden(e):
-    return "You are not allowed to perform this request", 403
 
 @app.login_manager.token_loader
 def authorize(token):
@@ -113,6 +103,49 @@ def socle(socle, version, server):
         if not current_user.has_role('admin'):
             abort(403)
         return 'Installing %s %s on %s...' % (socle, version, server)
+
+api = Api(app)
+
+def api_router(self, *args, **kwargs):
+    def wrapper(cls):
+        self.add_resource(cls, *args, **kwargs)
+        return cls
+    return wrapper
+
+api.route = types.MethodType(api_router, api)
+
+@api.route('/')
+class Index(Resource):
+    def get(self):
+        return {'message': "Hello World!"}
+
+@api.route('/admin')
+class Admin(Resource):
+    @auth_token_required
+    @all_roles('admin')
+    def get(self):
+        return {'message': "Welcome Administrator"}
+
+@api.route('/users')
+class Users(Resource):
+    @auth_token_required
+    @any_role('admin', 'user')
+    def get(self):
+        return {'message': "Welcome User"}
+    
+    @auth_token_required
+    @any_role('admin', 'user')
+    def put(self):
+        if not current_user.has_role('admin'):
+            abort(403)
+        return {'message': "New user created"}
+
+@api.route('/users/me')
+class UserMe(Resource):
+    @auth_token_required
+    @any_role('admin', 'user')
+    def get(self):
+        return {'message': "Welcome %s" % current_user.name}
 
 if __name__ == '__main__':
     app.run()
