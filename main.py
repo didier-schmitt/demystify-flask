@@ -2,7 +2,7 @@
 
 from flask import Flask, render_template, request, abort, current_app
 from flask_sqlalchemy import SQLAlchemy
-from flask_security import Security, SQLAlchemyUserDatastore, UserMixin, RoleMixin, auth_token_required
+from flask_security import Security, SQLAlchemyUserDatastore, UserMixin, RoleMixin, auth_token_required, roles_accepted, current_user
 
 app = Flask(__name__)
 app.config['DEBUG'] = True
@@ -11,7 +11,7 @@ app.config['SECRET_KEY'] = 'forgetme'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite://'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-app.config['SECURITY_TOKEN_AUTHENTICATION_HEADER'] = 'X-FLASK-Token'
+app.config['SECURITY_TOKEN_AUTHENTICATION_HEADER'] = 'Authorization'
 
 db = SQLAlchemy(app)
 
@@ -39,9 +39,19 @@ security = Security(app, user_datastore)
 @app.before_first_request
 def create_realm():
     db.create_all()
-    user_datastore.create_user(api_key='bobby', name='Bobby')
-    user_datastore.create_user(api_key='freddie', name='Freddie')
+
+    b = user_datastore.create_user(api_key='bobby', name='Bobby')
+    f = user_datastore.create_user(api_key='freddie', name='Freddie')
+    t = user_datastore.create_user(api_key='tommy', name='Tommy')
+
+    a = user_datastore.create_role(name='admin')
+    u = user_datastore.create_role(name='user')
+
+    user_datastore.add_role_to_user(b, a)
+    user_datastore.add_role_to_user(f, u)
+
     db.session.commit()
+
     ## Monkey patching the flasksecurity callback
     current_app.extensions['security']._unauthorized_callback = lambda: abort(401)
 
@@ -51,7 +61,7 @@ def hello():
 
 @app.errorhandler(401)
 def unauthorized(e):
-    return "You didn't say the magic word", 401
+    return "You didn't say the magic word", 401, {'WWW-Authenticate': 'Token realm="Flask"'}
 
 @app.login_manager.token_loader
 def authorize(token):
@@ -59,10 +69,14 @@ def authorize(token):
 
 @app.route('/socle/<socle>/<version>/<server>', methods=['GET', 'PUT'])
 @auth_token_required
+@roles_accepted('admin', 'user') 
+# Flask-Security returns HTTP 401 when roles expected are missing but it should return HTTP 403
 def socle(socle, version, server):
     if request.method == 'GET':
         return 'You want me to install %s %s on server %s' % (socle, version, server)
     else:
+        if not  current_user.has_role('admin'):
+            abort(403)
         return 'Installing %s %s on %s...' % (socle, version, server)
 
 if __name__ == '__main__':
