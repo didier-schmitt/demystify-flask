@@ -2,11 +2,12 @@
 
 from functools import wraps
 import types
+import json
 
-from flask import Flask, render_template, request, abort, current_app, Response
+from flask import Flask, request, Blueprint, _request_ctx_stack
 from flask_sqlalchemy import SQLAlchemy
-from flask_security import Security, SQLAlchemyUserDatastore, UserMixin, RoleMixin, auth_token_required, current_user
-from flask_principal import Permission, RoleNeed
+from flask_security import Security, SQLAlchemyUserDatastore, UserMixin, RoleMixin, current_user
+from flask_principal import identity_changed, Identity
 from flask_restful import Api, Resource
 
 app = Flask(__name__)
@@ -16,8 +17,13 @@ app.config['SECRET_KEY'] = 'forgetme'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite://'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-app.config['SECURITY_TOKEN_AUTHENTICATION_HEADER'] = 'Authorization'
+_unauthenticated_response = json.dumps({'message': 'You must authenticate to perform this request'}), 401,  {'Content-Type': 'application/json', 'WWW-Authenticate': 'Token realm="flask"'}
+_unauthorized_repsonse = json.dumps({'message': 'You are not authorized to perform this request'}), 401,  {'Content-Type': 'application/json', 'WWW-Authenticate': 'Token realm="flask"'}
+_forbidden_response = json.dumps({'message': 'You are not authorized to perform this request'}), 403, {'Content-Type': 'application/json'}
 
+#
+# UserDataStore Setup
+#
 db = SQLAlchemy(app)
 
 roles_users = db.Table('roles_users',
@@ -35,7 +41,6 @@ class User(db.Model, UserMixin):
     api_key = db.Column(db.String(255), unique=True)
     name = db.Column(db.String(50))
     active = db.Column(db.Boolean())
-    confirmed_at = db.Column(db.DateTime())
     roles = db.relationship('Role', secondary=roles_users, backref=db.backref('users', lazy='dynamic'))
 
 user_datastore = SQLAlchemyUserDatastore(db, User, Role)
@@ -58,78 +63,78 @@ def create_realm():
 
     db.session.commit()
 
-@app.login_manager.token_loader
-def authorize(token):
-    return User.query.filter_by(api_key=token).first()
+#
+#  Security Setup
+#
+user_bp = Blueprint('user_bp', __name__)
+admin_bp = Blueprint('admin_bp', __name__)
 
-def any_role(*roles):
-    """
-    Flask-Security's @roles_accepted decoration returns HTTP 401 when roles expected are missing 
-    Yet we wish to return HTTP 403
-    """
-    def wrapper(fn):
-        @wraps(fn)
-        def decorated_view(*args, **kwargs):
-            perm = Permission(*[RoleNeed(role) for role in roles])
-            if perm.can():
-                return fn(*args, **kwargs)
-            else:
-                abort(403)
-        return decorated_view
-    return wrapper
+@app.before_request
+def authenticate():
+    token = request.headers.get('Authorization')
+    if token:
+        user = User.query.filter_by(api_key=token).first()
+        if user:
+            # Hijack Flask-Login to set current_user
+            _request_ctx_stack.top.user = user
+            identity_changed.send(app, identity=Identity(user.id))
+        else: 
+            return _unauthorized_repsonse
+    else:
+        return _unauthenticated_response
 
-def all_roles(*roles):
-    def wrapper(fn):
-        @wraps(fn)
-        def decorated_view(*args, **kwargs):
-            perms = [Permission(RoleNeed(role)) for role in roles]
-            for perm in perms:
-                if not perm.can():
-                    abort(403)
-            return fn(*args, **kwargs)
-        return decorated_view
-    return wrapper
+def authorize(role):
+    if not current_user.is_authenticated:
+        return _unauthenticated_response
+    if not current_user.has_role(role):
+        return _forbidden_response
+    return None
 
-api = Api(app)
+@user_bp.before_request
+def authorize_user():
+    return authorize('user')
 
-def api_router(self, *args, **kwargs):
-    def wrapper(cls):
-        self.add_resource(cls, *args, **kwargs)
-        return cls
-    return wrapper
+@admin_bp.before_request
+def authorize_admin():
+    return authorize('admin')
 
-api.route = types.MethodType(api_router, api)
 
-@api.route('/')
+#
+# API Resources 
+#
 class Index(Resource):
     def get(self):
         return {'message': "Hello World!"}
 
-@api.route('/admin')
-class Admin(Resource):
-    @auth_token_required
-    @all_roles('admin')
-    def get(self):
-        return {'message': "Welcome Administrator"}
-
-@api.route('/users')
 class Users(Resource):
-    @auth_token_required
-    @any_role('admin', 'user')
     def get(self):
-        return {'message': "Welcome User"}
-    
-    @auth_token_required
-    @any_role('admin')
+        return {'message': "Welcome Users"}
     def put(self):
         return {'message': "New user created"}
 
-@api.route('/users/me')
 class UserMe(Resource):
-    @auth_token_required
-    @any_role('admin', 'user')
     def get(self):
         return {'message': "Welcome %s" % current_user.name}
 
+class Admin(Resource):
+    def get(self):
+        return {'message': "Welcome Administrator"}
+
+#
+# API Endpoints
+#
+user_api = Api(user_bp)
+admin_api = Api(admin_bp)
+
+user_api.add_resource(Index, '/')
+user_api.add_resource(Users, '/users')
+user_api.add_resource(UserMe, '/users/me')
+admin_api.add_resource(Admin, '/admin')
+
+#
+# Run Flask
+#
+app.register_blueprint(user_bp)
+app.register_blueprint(admin_bp)
 if __name__ == '__main__':
     app.run()
