@@ -10,6 +10,8 @@ from flask_security import Security, SQLAlchemyUserDatastore, UserMixin, RoleMix
 from flask_principal import identity_changed, Identity
 from flask_restful import Api, Resource
 
+from jenkins import JenkinsHelper
+
 app = Flask(__name__)
 app.config['DEBUG'] = True
 app.config['SECRET_KEY'] = 'forgetme'
@@ -67,7 +69,6 @@ def create_realm():
 #  Security Setup
 #
 user_bp = Blueprint('user_bp', __name__)
-admin_bp = Blueprint('admin_bp', __name__)
 
 @app.before_request
 def authenticate():
@@ -93,48 +94,34 @@ def authorize(role):
 @user_bp.before_request
 def authorize_user():
     return authorize('user')
-
-@admin_bp.before_request
-def authorize_admin():
-    return authorize('admin')
-
-
 #
 # API Resources 
 #
-class Index(Resource):
-    def get(self):
-        return {'message': "Hello World!"}
-
-class Users(Resource):
-    def get(self):
-        return {'message': "Welcome Users"}
+class Echo(Resource):
     def put(self):
-        return {'message': "New user created"}
+        jh = JenkinsHelper('YWRtaW46YWRtaW4=')
+        queue = jh.build('echo')
+        if not queue is None:
+            return {'job': queue}, {'Content-Type': 'application/json'}
+        else:
+            return {'message': 'Failed to launch a job'}, 500
 
-class UserMe(Resource):
-    def get(self):
-        return {'message': "Welcome %s" % current_user.name}
-
-class Admin(Resource):
-    def get(self):
-        return {'message': "Welcome Administrator"}
+class Job(Resource):
+    def get(self, id):
+        jh =  JenkinsHelper('YWRtaW46YWRtaW4=')
+        return {'status': jh.status(id)}
 
 #
 # API Endpoints
 #
 user_api = Api(user_bp)
-admin_api = Api(admin_bp)
 
-user_api.add_resource(Index, '/')
-user_api.add_resource(Users, '/users')
-user_api.add_resource(UserMe, '/users/me')
-admin_api.add_resource(Admin, '/admin')
+user_api.add_resource(Echo, '/echo')
+user_api.add_resource(Job, '/job/<id>')
 
 #
 # Run Flask
 #
 app.register_blueprint(user_bp)
-app.register_blueprint(admin_bp)
 if __name__ == '__main__':
     app.run()
